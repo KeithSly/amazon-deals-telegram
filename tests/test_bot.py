@@ -2,13 +2,14 @@ from __future__ import annotations
 
 import tempfile
 import unittest
+from unittest.mock import patch
 from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
 
 from amazon_deals_bot.config import Config
 from amazon_deals_bot.database import DealDatabase
-from amazon_deals_bot.demo import DemoProvider
+from amazon_deals_bot.demo import DEMO_HOT_ASIN, DemoProvider
 from amazon_deals_bot.engines.discovery import DiscoveryEngine
 from amazon_deals_bot.models import Alert, AlertKind, Deal, Priority, ProductSnapshot, ProductState
 from amazon_deals_bot.providers.keepa import KeepaProvider, keepa_time_to_datetime
@@ -166,7 +167,34 @@ class TelegramTests(unittest.TestCase):
         message = notifier.render_message(alert)
         self.assertIn("NUEVA RESERVA", message)
         self.assertIn("Game &amp; Collector", message)
-        self.assertIn("109,99 EUR", message)
+        self.assertIn("109,99 €", message)
+
+    @patch("amazon_deals_bot.telegram.post_json")
+    def test_public_telegram_test_command_payload(self, post_json_mock) -> None:
+        post_json_mock.return_value = {"ok": True}
+        notifier = TelegramNotifier(make_config(dry_run=False))
+        notifier.send_test(personal=False)
+        payload = post_json_mock.call_args.args[1]
+        self.assertEqual(payload["chat_id"], "public")
+        self.assertIn("canal público", payload["text"])
+
+    @patch("amazon_deals_bot.telegram.post_json")
+    def test_personal_telegram_test_command_payload(self, post_json_mock) -> None:
+        post_json_mock.return_value = {"ok": True}
+        notifier = TelegramNotifier(make_config(dry_run=False))
+        notifier.send_test(personal=True)
+        payload = post_json_mock.call_args.args[1]
+        self.assertEqual(payload["chat_id"], "personal")
+        self.assertIn("alertas HOT", payload["text"])
+
+    def test_hot_message_uses_clean_personal_url(self) -> None:
+        notifier = TelegramNotifier(make_config(amazon_associate_tag="example-21"))
+        product = ProductSnapshot(DEMO_HOT_ASIN, "Limited console", 49999, availability_amazon=0)
+        alert = Alert(AlertKind.RESTOCK, ProductState.BACK_IN_STOCK, product, Priority.HOT, personal=True)
+        message = notifier.render_message(alert)
+        self.assertIn("ALERTA HOT", message)
+        self.assertIn("PRIORIDAD ALTA", message)
+        self.assertNotIn("example-21", notifier.amazon_url(product.asin, personal=True))
 
 
 class EngineTests(unittest.TestCase):
@@ -185,6 +213,29 @@ class EngineTests(unittest.TestCase):
         self.assertGreaterEqual(stats["collected"], 5)
         self.assertEqual(stats["sent"], 0)
         self.assertEqual(stats["failed"], 0)
+        db.close()
+
+    def test_hot_demo_flows_to_personal_notifier(self) -> None:
+        class CapturingNotifier:
+            def __init__(self):
+                self.alerts = []
+
+            def send(self, alert):
+                self.alerts.append(alert)
+
+        config = make_config(dry_run=False)
+        db = DealDatabase(":memory:")
+        db.add_watch(DEMO_HOT_ASIN, Priority.HOT, personal=True)
+        notifier = CapturingNotifier()
+        service = MonitoringService(config, DemoProvider(emit_hot_notification=True, hot_only=True), db, notifier, dry_run=False)
+        stats = service.run_once("restock")
+        self.assertEqual(stats["sent"], 1)
+        self.assertEqual(len(notifier.alerts), 1)
+        alert = notifier.alerts[0]
+        self.assertEqual(alert.product.asin, DEMO_HOT_ASIN)
+        self.assertEqual(alert.priority, Priority.HOT)
+        self.assertTrue(alert.personal)
+        self.assertEqual(alert.kind, AlertKind.RESTOCK)
         db.close()
 
 

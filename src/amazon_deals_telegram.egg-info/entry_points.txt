@@ -1,0 +1,2 @@
+[console_scripts]
+amazon-deals-bot = amazon_deals_bot.main:main

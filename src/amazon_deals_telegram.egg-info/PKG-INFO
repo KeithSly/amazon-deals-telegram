@@ -1,3 +1,10 @@
+Metadata-Version: 2.4
+Name: amazon-deals-telegram
+Version: 0.3.0
+Summary: Amazon.es monitor for deals, new products, preorders and restocks with Telegram alerts
+Requires-Python: >=3.11
+Description-Content-Type: text/markdown
+
 # Amazon Deals Telegram
 
 Monitor de **Amazon.es** orientado a ofertas, videojuegos, reservas y productos con stock limitado. Keepa es la fuente prevista para datos reales y Telegram es el canal de aviso.
