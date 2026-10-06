@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "amazon-deals-telegram"
-version = "0.1.0"
-description = "Amazon.es deal detector using Keepa with Telegram notifications"
+version = "0.2.0"
+description = "Amazon.es monitor for deals, new products, preorders and restocks with Telegram alerts"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = []

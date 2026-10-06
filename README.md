@@ -1,249 +1,207 @@
-# Amazon Deals -> Telegram
+# Amazon Deals Telegram
 
-Bot en Python para detectar ofertas recientes de Amazon.es mediante Keepa y publicarlas automaticamente en Telegram.
+Monitor de **Amazon.es** orientado a ofertas, videojuegos y productos de stock limitado. Usa Keepa como fuente principal y Telegram como canal de aviso.
 
-La version inicial esta pensada para ser simple de desplegar y mantener: solo usa la libreria estandar de Python, guarda el historico en SQLite y puede ejecutarse directamente, con Docker o Docker Compose.
+## Qué detecta
 
-## Funciones
+- 🔥 **Ofertas**: bajadas de precio filtradas por porcentaje, precio, rating y categorías.
+- 🆕 **Productos nuevos**: ASIN que Keepa ha empezado a seguir recientemente.
+- 🎮 **Reservas / preorders**: Buy Box marcada como preorder o disponibilidad futura de Amazon.
+- ⚡ **Vuelta a stock**: productos que pasan de agotados a disponibles.
+- 🚨 **Watchlist HOT**: ASIN concretos registrados en Keepa Tracking para eventos `OUT_OF_STOCK` / `BACK_IN_STOCK`.
 
-- Consulta el endpoint `/deal` de Keepa.
-- Restringido de forma intencionada a Amazon.es (`domainId=9`).
-- Filtra por descuento minimo, rango de precio, rating minimo, categorias y palabras excluidas.
-- Puede exigir que exista una oferta vendida por Amazon.
-- Puede limitarse a precios en minimo de 90 dias.
-- Ordena las ofertas por porcentaje de bajada.
-- Guarda en SQLite los productos ya enviados.
-- No repite un producto al mismo precio.
-- Permite reenviar inmediatamente si el precio cae de nuevo un porcentaje configurable.
-- Envia mensajes a chats, grupos o canales de Telegram.
-- Incluye boton directo al producto de Amazon.
-- Soporta opcionalmente un tag de Amazon Associates.
-- Incluye modo `demo` y `dry-run` para probar sin Telegram ni Keepa.
-- No requiere paquetes Python externos.
+El proyecto **no compra automáticamente**. No contiene checkout automatizado, almacenamiento de credenciales de Amazon ni bypass de CAPTCHA. Para productos limitados manda una alerta urgente con enlace directo a Amazon.
 
 ## Arquitectura
 
 ```text
-Keepa /deal
-     |
-     v
-KeepaProvider
-     |
-     v
-DealService ----> filtros locales
-     |
-     +----> SQLite (deduplicacion)
-     |
-     v
-TelegramNotifier ----> Telegram Bot API
+Keepa
+  ├─ /deal       -> ofertas + restocks recientes
+  ├─ /query      -> nuevos productos + preorders
+  ├─ /product    -> ficha/precio/fechas/estado
+  └─ /tracking   -> ASIN HOT y notificaciones stock
+        |
+        v
+Engines
+  ├─ DealEngine
+  ├─ DiscoveryEngine
+  ├─ PreorderEngine
+  └─ RestockEngine
+        |
+        v
+SQLite
+  ├─ products
+  ├─ state_history
+  ├─ sent_events
+  ├─ sent_deals
+  ├─ watchlist
+  └─ processed_notifications
+        |
+        v
+Telegram
+  ├─ canal público -> puede usar Amazon Associates
+  └─ chat personal -> siempre URL limpia, sin tag de afiliado
 ```
 
-## 1. Requisitos
+## Estados persistidos
 
-- Python 3.11 o superior, o Docker.
-- Una API key de Keepa para el modo real.
-- Un bot de Telegram creado con `@BotFather`.
-- El `chat_id` del chat, grupo o canal donde publicara el bot.
+`NEW`, `PREORDER`, `AVAILABLE`, `OUT_OF_STOCK`, `BACK_IN_STOCK`, `DEAL`, `EXPIRED`.
 
-Keepa documenta que `/deal` cuesta 5 tokens por consulta y devuelve hasta 150 resultados por pagina. El bot usa una sola pagina por defecto para controlar el consumo.
+`products` guarda el último estado estable y `state_history` conserva las transiciones/eventos relevantes.
 
-## 2. Configuracion
+## Requisitos
 
-Copia el fichero de ejemplo:
+- Python 3.11+
+- API key de Keepa para funcionamiento real
+- Bot de Telegram y chat/canal destino
+- Opcional: tag de Amazon Afiliados
+
+No hay dependencias Python de terceros en esta versión.
+
+## Instalación
 
 ```bash
+git clone https://github.com/KeithSly/amazon-deals-telegram.git
+cd amazon-deals-telegram
+python -m venv .venv
+```
+
+Windows:
+
+```powershell
+.venv\Scripts\activate
+pip install -e .
+copy .env.example .env
+```
+
+Linux/macOS:
+
+```bash
+source .venv/bin/activate
+pip install -e .
 cp .env.example .env
 ```
 
-Edita `.env`:
+Edita `.env` y añade como mínimo:
 
 ```dotenv
-SOURCE=keepa
-KEEPA_API_KEY=TU_API_KEY
-TELEGRAM_BOT_TOKEN=TU_TOKEN
-TELEGRAM_CHAT_ID=TU_CHAT_ID
-
-MIN_DISCOUNT_PERCENT=25
-MIN_PRICE_EUR=5
-MAX_PRICE_EUR=1500
-MIN_RATING=4.0
-POLL_SECONDS=600
+KEEPA_API_KEY=...
+TELEGRAM_BOT_TOKEN=...
+TELEGRAM_PUBLIC_CHAT_ID=...
 ```
 
-El fichero `.env` esta ignorado por Git y no debe subirse al repositorio.
-
-### Keepa
-
-Valores principales:
-
-- `KEEPA_DOMAIN_ID=9`: Amazon.es.
-- `KEEPA_PRICE_TYPE=0`: precio de Amazon.
-- `KEEPA_DATE_RANGE=0`: cambio durante el ultimo dia.
-- `KEEPA_MAX_PAGES=1`: maximo de paginas por ciclo.
-- `MIN_DISCOUNT_PERCENT=25`: descuento minimo.
-- `MIN_RATING=4.0`: rating minimo. Keepa lo recibe internamente en escala 0-50.
-- `ONLY_LOWEST_90=true`: opcional, solo precios en minimo de 90 dias.
-- `MUST_HAVE_AMAZON_OFFER=true`: exige una oferta actual de Amazon.
-
-`KEEPA_DATE_RANGE` acepta:
-
-```text
-0 = dia
-1 = semana
-2 = mes
-3 = 90 dias
-```
-
-### Categorias
-
-Se pueden limitar o excluir categorias mediante IDs de Amazon separados por comas:
+Para alertas personales HOT:
 
 ```dotenv
-INCLUDE_CATEGORIES=123,456
-EXCLUDE_CATEGORIES=789
+TELEGRAM_PERSONAL_CHAT_ID=...
 ```
 
-Si se dejan vacios se aceptan todas las categorias.
+## Prueba sin Keepa ni Telegram
 
-### Telegram
+```bash
+amazon-deals-bot --source demo --dry-run --once
+```
 
-Crea un bot con `@BotFather`, copia su token y anadelo a `.env`.
+También puedes ejecutar solo un motor:
 
-Para un canal, anade el bot como administrador con permiso para publicar y usa el identificador del canal o su `chat_id`.
+```bash
+amazon-deals-bot --source demo --dry-run --once --mode preorders
+amazon-deals-bot --source demo --dry-run --once --mode restock
+```
 
-El bot utiliza los metodos oficiales `sendMessage` y, opcionalmente, `sendPhoto` de Telegram Bot API.
+## Añadir un producto HOT
 
-Por defecto:
+```bash
+amazon-deals-bot --watch-asin B0XXXXXXXX --watch-priority HOT
+```
+
+Por defecto es una alerta **personal**. El botón de Amazon no incluye el tag de afiliado.
+
+Para vigilarlo y publicar los avisos en el canal público:
+
+```bash
+amazon-deals-bot --watch-asin B0XXXXXXXX --watch-priority HOT --public-watch
+```
+
+Ver watchlist:
+
+```bash
+amazon-deals-bot --list-watchlist
+```
+
+Eliminar:
+
+```bash
+amazon-deals-bot --unwatch-asin B0XXXXXXXX
+```
+
+Si `KEEPA_TRACKING_ENABLED=true`, al añadir un ASIN se crea también el tracking remoto de Keepa para avisos de salida/vuelta a stock.
+
+## Gaming por defecto
+
+La plantilla usa como categoría de descubrimiento:
 
 ```dotenv
-TELEGRAM_SEND_IMAGE=false
+DISCOVERY_ROOT_CATEGORIES=599383031
 ```
 
-Keepa indica que el uso de la imagen del producto requiere disponer de los derechos correspondientes. Por esa razon el proyecto no publica imagenes de forma predeterminada.
+que corresponde a **Videojuegos** en Amazon.es. Puedes añadir más categorías separadas por coma.
 
-## 3. Primera prueba sin credenciales
+El descubrimiento usa `trackingSince` de Keepa. Esto significa **"recién detectado por Keepa"**, no garantiza que el producto se detecte exactamente en el segundo en que Amazon crea la ficha.
 
-Puedes verificar toda la logica usando ofertas de demostracion:
+## Frecuencia y tokens
 
-```bash
-PYTHONPATH=src python -m amazon_deals_bot --source demo --dry-run --once
-```
-
-Deberias ver en el log dos ofertas de prueba y ningun mensaje sera enviado.
-
-## 4. Validar la configuracion
-
-```bash
-PYTHONPATH=src python -m amazon_deals_bot --check-config
-```
-
-## 5. Ejecutar una unica consulta real
-
-```bash
-PYTHONPATH=src python -m amazon_deals_bot --once
-```
-
-Esto consulta Keepa una vez, aplica los filtros y envia a Telegram las ofertas nuevas.
-
-## 6. Ejecutar continuamente
-
-```bash
-PYTHONPATH=src python -m amazon_deals_bot
-```
-
-El intervalo se controla con:
+La ejecución normal usa:
 
 ```dotenv
 POLL_SECONDS=600
 ```
 
-El minimo permitido por esta aplicacion es 60 segundos. Un intervalo corto consume mas tokens de Keepa.
+Es decir, un ciclo cada 10 minutos. Los motores se pueden ejecutar por separado si más adelante queremos dar a `restock`/`preorders` una cadencia más agresiva que a las ofertas.
 
-## 7. Docker
+Ten en cuenta que Product Finder (`/query`) y Product Request (`/product`) consumen más tokens que `/deal`. El log muestra `tokens_left`, `tokens_consumed` y `refill_rate` en cada llamada para poder ajustar el consumo con datos reales.
 
-```bash
-docker compose up -d --build
-```
+## Amazon Afiliados
 
-Ver logs:
-
-```bash
-docker compose logs -f
-```
-
-Parar:
-
-```bash
-docker compose down
-```
-
-La base de datos queda en `./data/deals.sqlite3`.
-
-## 8. Evitar mensajes repetidos
-
-La tabla SQLite conserva el ultimo precio enviado de cada ASIN y tipo de precio.
-
-Politica predeterminada:
-
-```dotenv
-RESEND_COOLDOWN_HOURS=24
-RESEND_MIN_EXTRA_DISCOUNT_PERCENT=5
-```
-
-- Mismo precio o precio superior: no se vuelve a enviar.
-- Nueva bajada de al menos 5% respecto al ultimo precio enviado: se envia inmediatamente.
-- Bajada menor: solo puede reenviarse despues del periodo de cooldown.
-
-## 9. Amazon Associates
-
-Si dispones de una cuenta valida de Amazon Associates puedes configurar tu tag:
+Configura:
 
 ```dotenv
 AMAZON_ASSOCIATE_TAG=mitag-21
 AFFILIATE_DISCLOSURE=Enlace de afiliado
 ```
 
-El bot generara enlaces de la forma:
+Las alertas públicas usarán:
 
 ```text
 https://www.amazon.es/dp/ASIN?tag=mitag-21
 ```
 
-No actives esta opcion si no dispones de un identificador valido. Revisa siempre las condiciones vigentes del programa de afiliados y las obligaciones de identificacion de enlaces publicitarios que te correspondan.
+Las alertas personales/HOT siempre usan:
 
-## 10. Tests
-
-No se necesitan dependencias de test adicionales:
-
-```bash
-PYTHONPATH=src python -m unittest discover -s tests -v
+```text
+https://www.amazon.es/dp/ASIN
 ```
 
-## 11. Variables disponibles
+Esto evita usar tu propio tag cuando el aviso es para una compra personal.
 
-Consulta `.env.example`. Las mas importantes son:
+## Docker
 
-| Variable | Default | Uso |
-| --- | ---: | --- |
-| `SOURCE` | `keepa` | `keepa` o `demo` |
-| `MIN_DISCOUNT_PERCENT` | `25` | Bajada minima |
-| `MIN_PRICE_EUR` | `5` | Precio minimo |
-| `MAX_PRICE_EUR` | `1500` | Precio maximo |
-| `MIN_RATING` | `4.0` | Valoracion minima |
-| `ONLY_LOWEST_90` | `false` | Exigir minimo de 90 dias |
-| `MAX_DEALS_PER_CYCLE` | `20` | Limite de publicaciones por ciclo |
-| `POLL_SECONDS` | `600` | Intervalo entre consultas |
-| `TELEGRAM_SEND_IMAGE` | `false` | Intentar enviar imagen del producto |
-| `DRY_RUN` | `false` | No enviar mensajes |
+```bash
+cp .env.example .env
+# editar .env
+docker compose up -d --build
+```
 
-## Seguridad
+La base de datos se conserva en `./data`.
 
-- No subas `.env`.
-- No escribas el token de Telegram ni la API key de Keepa en el codigo.
-- Si una credencial aparece accidentalmente en Git, revocala y genera una nueva; borrarla en un commit posterior no la elimina del historial.
+## Tests
 
-## Fuentes API
+```bash
+python -m unittest discover -s tests -v
+```
 
-- Keepa API: https://keepa.com/api-docs/
-- Keepa Deals: https://keepa.com/api-docs/deals.html
-- Telegram Bot API: https://core.telegram.org/bots/api
+## Siguiente evolución prevista
+
+El código incluye una frontera `AmazonCreatorsProvider` para incorporar más adelante **Amazon Creators API** como fuente oficial de catálogo/enriquecimiento cuando la cuenta de Afiliados esté aprobada. Keepa seguiría siendo la fuente de histórico de precios, cambios y tracking.
+
+También queda preparado el modelo público/personal para que una futura web pueda recibir las publicaciones públicas antes de redirigir a Amazon.

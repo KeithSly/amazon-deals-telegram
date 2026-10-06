@@ -1,28 +1,57 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
-from .models import Deal
+from .models import Deal, ProductSnapshot, ProductState
+from .providers.keepa import KeepaTrackingNotification
 
 
 class DemoProvider:
     def fetch_deals(self) -> list[Deal]:
         now = datetime.now(timezone.utc)
         return [
-            Deal(
-                asin="B0DEMO0001",
-                title="SSD NVMe 2 TB - oferta de demostracion",
-                current_price_cents=7999,
-                reference_price_cents=11999,
-                discount_percent=33,
-                source_updated_at=now,
+            Deal("B0DEMO0001", "SSD NVMe 2 TB - oferta de demostracion", 7999, 11999, 33, source_updated_at=now),
+            Deal("B0DEMO0002", "Auriculares Bluetooth - oferta de demostracion", 3999, 5999, 33, source_updated_at=now),
+        ]
+
+    def discover_new_products(self) -> list[ProductSnapshot]:
+        now = datetime.now(timezone.utc)
+        return [
+            ProductSnapshot(
+                asin="B0NEWGAME01",
+                title="Juego nuevo - edicion especial",
+                current_price_cents=6999,
+                root_category=599383031,
+                tracking_since=now,
+                listed_since=now,
+                availability_amazon=0,
+                is_amazon_offer=True,
             ),
-            Deal(
-                asin="B0DEMO0002",
-                title="Auriculares Bluetooth - oferta de demostracion",
-                current_price_cents=3999,
-                reference_price_cents=5999,
-                discount_percent=33,
-                source_updated_at=now,
+            ProductSnapshot(
+                asin="B0PREORD001",
+                title="Collector's Edition - reserva",
+                current_price_cents=10999,
+                root_category=599383031,
+                tracking_since=now,
+                release_date=now + timedelta(days=60),
+                availability_amazon=1,
+                is_preorder=True,
+                is_amazon_offer=True,
             ),
         ]
+
+    def discover_preorders(self) -> list[ProductSnapshot]:
+        return [self.discover_new_products()[1]]
+
+    def fetch_restock_deals(self) -> list[Deal]:
+        now = datetime.now(timezone.utc)
+        return [Deal("B0RESTOCK01", "Consola limitada - vuelve el stock", 49999, None, 0, source_updated_at=now)]
+
+    def add_stock_tracking(self, asin: str, metadata: str = "") -> None:
+        return None
+
+    def remove_stock_tracking(self, asin: str) -> None:
+        return None
+
+    def fetch_tracking_notifications(self, since: int) -> list[KeepaTrackingNotification]:
+        return []
